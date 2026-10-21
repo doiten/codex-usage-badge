@@ -26,7 +26,7 @@ macOS 额外运行原生测试：
 node tests/startup-native.cjs .devtools/macos-startup-bridge
 ```
 
-PowerShell 测试：`pwsh -File tests/windows.ps1`。Windows CI 还会运行 `tests/windows-native.ps1`，验证安装、快捷方式、后台停止和卸载。
+PowerShell 测试：`pwsh -File tests/windows.ps1`。`tests/windows-launch.ps1` 使用合成包清单和替代原生助手验证手动 Store 启动路径；Windows CI 在 PowerShell 5.1 下执行它，并运行 `tests/windows-native.ps1` 验证安装、快捷方式、后台停止和卸载。
 
 Windows 启动适配器测试：`powershell -NoProfile -ExecutionPolicy Bypass -File tests/windows-startup-native.ps1`。它仅操作临时隐藏应用，检查进程身份、Raw Input 活动分类、正常退出/拒绝及重开。`startup/` 为 Windows 适配器；macOS 保持原有 `macos/startup/` 实现。
 
@@ -36,10 +36,24 @@ Windows 启动适配器测试：`powershell -NoProfile -ExecutionPolicy Bypass -
 
 ## 数据与兼容性
 
-额度来自客户端 CLI 的账号接口。Plus 显示短周期与每周额度，Pro 显示周额度；大于 50% 为绿、10%～50% 为黄、小于 10% 为红。
+额度来自客户端 CLI 的账号接口。圆环数量由实际返回的有效额度周期决定，不依赖套餐名称：只有 5 小时或每周额度时显示一个圆环，两者都有时显示两个；缺失或无效的周期不补画圆环。返回顺序不影响显示顺序，双圆环始终先显示 5 小时额度，再显示每周额度。没有有效额度时显示不可用；连接失败时将已有圆环置灰，恢复后根据新数据重新判断数量。大于 50% 为绿、10%～50% 为黄、小于 10% 为红。
 
 Token 读取本机会话数据库中的累计值，包含缓存输入，不代表当前上下文大小。色块的四档分界为 100 万、1000 万和 1 亿；无记录时为灰色。额度约每分钟刷新，Token 约每 5 秒刷新。
 
 项目容量按本机项目路径计算，macOS 使用目录占用统计；默认两路并发，缓存 5 分钟，单项目计算最多 3 分钟。不可访问的目录显示 `—`，不以不完整结果冒充完整容量。
 
 插件依赖客户端内部界面和调试接口。自动化测试使用临时目录、模拟页面与独立测试应用，不读取真实账号。macOS 自动加载已完成本机真实客户端重启验证；Windows 安装流程由 CI 验证，已登录客户端的长期兼容性仍需更多设备反馈。
+
+## 本 fork 的选择性移植
+
+- [上游 PR #4](https://github.com/jaykinhoo9/codex-usage-badge/pull/4)，提交 `2e77ffad9c47046724575bc94edc6e02e0118067`：按有效额度周期决定单／双圆环；补充忽略同周期无效数据的回归覆盖。
+- [上游 PR #9](https://github.com/jaykinhoo9/codex-usage-badge/pull/9)，提交 `2b774ef0eb0686f4644bd36e6f16a2018ee4966c`：仅移植 Windows 启动状态的唯一临时文件和有界共享冲突重试，以及相关测试。未移植该 PR 的 Store 手动启动部分。
+
+另外，将 2026-10-20 本机补丁从原线程保留的完整差异迁入可构建源码：
+
+- `src/injected-ui.js`：拖动阈值、位置保存与跨窗口同步、键盘微调、双击／Home 复位、原生按钮避让及空间不足时隐藏。沿用 `codex-usage-badge.position.v1` 存储键与偏移格式。
+- `startup/controller.cjs`：刚创建进程的命令行暂不可读时，在原有 8 秒窗口内等待；补充跳过原因。前台、输入、多实例、冷却和状态持久化保护继续生效。
+- `windows/manage-windows.ps1`：手动 Store 启动按精确可执行路径解析注册包标识，复用现有原生激活实现；身份解析或激活失败时不直接执行受保护文件。
+- Windows 自动更新默认关闭，重装保留已有显式偏好；手动检查仍可运行。macOS 更新策略不变。
+
+`npm test` 包含原补丁的 16 项几何边界和 11 项启动逻辑用例，以及独立浏览器中的拖动、保存恢复、单／双环切换和空间避让测试。历史本机验收不等同于本次整合版本的实机验收；真实 Codex 界面、Microsoft Store 激活及 Windows PowerShell 5.1 仍需 Windows 环境检查。构建和合并不会修改本机已安装应用。

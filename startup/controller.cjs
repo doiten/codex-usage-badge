@@ -20,12 +20,22 @@ class StartupController {
       }
       const fresh=snapshot.apps.filter(app=>!this.seen.has(app.key));
       if(this.seen.size>256)this.seen=new Set(snapshot.apps.map(app=>app.key));
+      // WMI can briefly return no command line for a just-created Store process.
+      // Wait within the existing launch window instead of permanently marking it seen.
+      if(fresh.some(app=>!app.argumentsKnown&&this.now()-app.launchedAt>=0&&this.now()-app.launchedAt<=8000)) {
+        this.pendingLaunch=true; return;
+      }
       if(fresh.length!==1||snapshot.apps.length!==1) {
         for(const app of snapshot.apps)this.seen.add(app.key);
+        if(fresh.length)await this.adapter.record('skipped-multiple-instances',{processCount:snapshot.apps.length});
         return;
       }
       const app=fresh[0], age=this.now()-app.launchedAt;
-      if(!app.argumentsKnown||app.plainLaunch===false||app.debugPort!==null) { this.seen.add(app.key); return; }
+      if(!app.argumentsKnown||app.plainLaunch===false||app.debugPort!==null) {
+        this.seen.add(app.key);
+        await this.adapter.record(!app.argumentsKnown?'skipped-unknown-arguments':app.plainLaunch===false?'skipped-launch-arguments':'already-debug-enabled');
+        return;
+      }
       // Wait for the initial launch to finish; never interrupt a partially initialized app.
       if((!app.finishedLaunching||snapshot.frontmostPid!==app.pid) && age>=0 && age<=8000 && snapshot.inputIdleMs>=age) {
         this.pendingLaunch=true; return;

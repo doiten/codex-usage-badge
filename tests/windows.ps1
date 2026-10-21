@@ -120,6 +120,8 @@ try {
     $script:failLink = $false
     Install-Badge $null
     Assert ($script:running -and (Test-Path -LiteralPath $script:ConfigPath)) 'install succeeded'
+    Assert (!(Get-AutoUpdateEnabled)) 'fork defaults automatic updates to off'
+    Assert ((Read-Json (Join-Path $script:InstallRoot 'update-preferences.json')).Enabled -eq $false) 'first install persists disabled preference'
     Assert (!(Test-Path -LiteralPath $script:DesktopLink)) 'no separate desktop launcher created'
     Write-Utf8 $script:DesktopLink (Get-ManagerArguments 'Launch')
     Write-Json (Join-Path $script:InstallRoot 'startup/state.json') @{lastAttemptAt=123;event='attempt'}
@@ -138,6 +140,10 @@ try {
     Assert ((Read-Json (Join-Path $script:InstallRoot 'startup/state.json')).lastAttemptAt -eq 123) 'cooldown receipt retained during upgrade'
     Assert (!(Get-AutoUpdateEnabled)) 'disabled auto update preference survives upgrade'
     Assert ((Read-Json (Join-Path $script:InstallRoot 'update-state.json')).checkedAt -eq 123) 'update interval survives upgrade'
+    Write-Json (Join-Path $script:InstallRoot 'update-preferences.json') @{Enabled=$true}
+    Install-Badge $null
+    Assert (Get-AutoUpdateEnabled) 'explicit opt-in survives upgrade'
+    Write-Json (Join-Path $script:InstallRoot 'update-preferences.json') @{Enabled=$false}
     $AutomaticUpdate=$true
     Throws { Install-Badge $null } 'disabled'
     $ForceUpdate=$true

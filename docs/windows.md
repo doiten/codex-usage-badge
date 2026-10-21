@@ -23,9 +23,15 @@ Windows 通过 Raw Input 观察实际操作：点击、滚轮或按键会取消�
 
 `Install.cmd` / `Launch.cmd` / `Status.cmd` / `Uninstall.cmd` 仅为本次 PowerShell 进程设置执行策略，不更改注册表或企业策略。脚本没有代码签名；设备策略禁止时请联系管理员。
 
+## 额度条位置调整
+
+按住额度条上下拖动，松开后保存位置；小于 4px 的抖动仍视为普通点击。双击或聚焦后按 Home 恢复默认，↑／↓ 每次移动 4px，Shift + ↑／↓ 每次移动 16px。
+
+位置使用本工具专属的 `codex-usage-badge.position.v1` 存储键，兼容此前本机补丁；同源窗口自动同步。窗口缩小或单／双额度环切换时重新避让原生按钮，空间不足会暂时隐藏额度条，空间恢复后重新显示。
+
 ## 自动更新（Windows 0.10.1 起）
 
-安装后默认开启。后台首次启动约 30 秒后检查 GitHub，之后每 6 小时检查一次；Windows 登录后台需要保持启用。只下载本仓库已发布且版本更高的 Windows Release，不使用 macOS 发布包或仅推送的源码提交。
+本 fork 默认关闭；首次安装会保存关闭偏好，升级或重装保留已有选择。显式开启后，后台首次启动约 30 秒后检查 GitHub，之后每 6 小时检查一次；Windows 登录后台需要保持启用。更新源仍为原项目 `jaykinhoo9/codex-usage-badge` 的 Windows Release，自动或手动安装原项目发布包都会替换本 fork 的定制代码。需要继续使用定制时，请保持关闭并从本 fork 构建升级。
 
 下载会核对发布页的 SHA-256 清单和 GitHub 资产摘要（如有），再验证 ZIP 内的每个文件及路径。安装沿用目录替换和失败回滚，保留自定义路径、更新开关和加载记录。更新过程只替换插件后台，Codex 窗口保持打开；下载失败会在下一个检查周期重试。`Status.cmd` 可查看更新结果；双击 `Update.cmd` 可立即手动检查，即使自动更新已关闭。
 
@@ -37,7 +43,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$env:LOCALAPPDATA\Codex
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$env:LOCALAPPDATA\CodexUsageBadge\manage-windows.ps1" -Action UpdatesOn
 ```
 
-也可首次安装时使用 `-Action Install -DisableAutoUpdate`。更新偏好记录在安装目录的 `update-preferences.json`，检查结果记录在 `update-state.json`。
+首次安装已默认关闭；`-Action Install -DisableAutoUpdate` 还可覆盖已有的开启偏好。更新偏好记录在安装目录的 `update-preferences.json`，检查结果记录在 `update-state.json`。
 
 发布新 Windows 版本时，同步修改 `package.json` 的 `windowsVersion` 和 `windows/manage-windows.ps1` 的版本号，然后运行 `python scripts/build_release.py --platform Windows`。在 GitHub 创建标签为 `v版本号-windows` 的 Release，上传生成的 `CodexUsageBadge-Windows-版本号.zip` 和同一批生成的 `SHA256SUMS.txt`，最后发布。更新器也接受该命名规则下的预发布 Release；草稿不会触发更新。
 
@@ -56,6 +62,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\manage-windows.ps1 -Ac
 - **未找到 Node / CLI**：先运行客户端一次；安装 Node.js 24 LTS；必要时显式指定路径。
 - **已运行但不能连接**：先查看 `Status.cmd` 中的自动加载状态。`skipped-active-or-background` 表示启动后已有操作或窗口在后台；`quit-refused` 表示系统退出请求被拒绝；`skipped-cooldown` 表示两分钟内已经尝试过一次。完全退出后可用 `Launch.cmd` 手动加载。
 - **原图标没有自动加载**：确认后台运行且 Windows 没有禁用它的启动项。等待两分钟后完全退出，再从原图标打开；开始操作前让窗口完成重开。
+- **启动参数暂不可读**：新进程会在原有 8 秒窗口内等待，不会立即永久跳过；到期仍不可读时记录 `skipped-unknown-arguments`。`skipped-launch-arguments`、`already-debug-enabled` 和 `skipped-multiple-instances` 分别表示携带特殊参数、已经启用调试连接或存在多个实例。
 - **客户端更新后失效**：v0.10.1 后台每 5 秒核对客户端和运行时路径，重新发现 Microsoft Store 更新后的位置并刷新观察器。之后完全退出客户端，再从原图标打开即可重新加载；已打开的窗口不会被强制重启。也可完全退出后运行 `Launch.cmd`。
 - **自动更新失败**：查看 `Status.cmd` 的更新状态，确认能够连接 GitHub API 和 Release 下载服务，或使用 `Update.cmd` 立即重试。校验或安装失败时继续使用原版本。
 - **只有额度不可用**：确认使用支持额度查询的账号，且 CLI 和客户端的登录/数据目录一致。

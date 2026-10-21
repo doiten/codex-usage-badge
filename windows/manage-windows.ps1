@@ -445,7 +445,9 @@ function Install-Badge($Overrides) {
             $oldFile = Join-Path $script:InstallRoot $name
             if (Test-Path -LiteralPath $oldFile) { Copy-Item -LiteralPath $oldFile -Destination (Join-Path $stage $name) }
         }
-        if ($DisableAutoUpdate) { Write-Json (Join-Path $stage 'update-preferences.json') @{ Enabled = $false } }
+        if ($DisableAutoUpdate -or !(Test-Path -LiteralPath (Join-Path $stage 'update-preferences.json'))) {
+            Write-Json (Join-Path $stage 'update-preferences.json') @{ Enabled = $false }
+        }
         $oldReceipt = Join-Path $script:InstallRoot 'startup/state.json'
         if (Test-Path -LiteralPath $oldReceipt) { Copy-Item -LiteralPath $oldReceipt -Destination (Join-Path $stage 'startup/state.json') }
         if (Test-Path -LiteralPath $script:InstallRoot) { Move-Item -LiteralPath $script:InstallRoot -Destination $backup; $oldMoved = $true }
@@ -477,6 +479,38 @@ function Get-DebugPages {
             Where-Object { $_.url -match '^app://-/index\.html(?:[?#]|$)' -and $_.url -notmatch '(?i)overlay' }
     } catch {}
 }
+function Start-DesktopWithConnection($Config) {
+    $appPath = [IO.Path]::GetFullPath([string]$Config.AppExe)
+    if (!(Test-DesktopExecutable $appPath)) { throw '客户端路径无效，未启动。' }
+    if ($appPath -match '(?i)[/\\]WindowsApps[/\\]') {
+        $applicationId = $null
+        foreach ($package in @(Get-AppxPackage -ErrorAction Stop | Where-Object { $_.Name -match '^OpenAI\.(Codex|ChatGPT)(\.|$)' })) {
+            $prefix = [IO.Path]::GetFullPath($package.InstallLocation).TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
+            if (!$appPath.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) { continue }
+            $manifest = Get-AppxPackageManifest -Package $package.PackageFullName
+            foreach ($application in @($manifest.Package.Applications.Application)) {
+                if (!$application.Executable) { continue }
+                $candidate = [IO.Path]::GetFullPath((Join-Path $package.InstallLocation ([string]$application.Executable)))
+                if ($candidate.Equals($appPath, [StringComparison]::OrdinalIgnoreCase)) {
+                    $applicationId = [string]$package.PackageFamilyName + '!' + [string]$application.Id
+                    break
+                }
+            }
+            if ($applicationId) { break }
+        }
+        if (!$applicationId) { throw '未能确认商店客户端的激活标识，未直接执行受保护的应用文件。' }
+        # Reuse the release's reviewed Store activation implementation and fixed loopback flags.
+        if (!('CodexUsageBadge.Startup.Native' -as [type])) {
+            Add-Type -Path (Join-Path $script:InstallRoot 'startup\windows-native.cs') -ReferencedAssemblies System.Management,System.Core,System.Windows.Forms
+        }
+        $native = [CodexUsageBadge.Startup.Native]
+        $flags = [Reflection.BindingFlags]'Static,NonPublic'
+        $native.GetField('appPath', $flags).SetValue($null, $appPath)
+        $native.GetField('applicationId', $flags).SetValue($null, $applicationId)
+        return $native.GetMethod('StartApplication', $flags).Invoke($null, [object[]]@())
+    }
+    return Start-Process -FilePath $appPath -ArgumentList '--remote-debugging-address=127.0.0.1 --remote-debugging-port=39222' -PassThru
+}
 function Launch-Badge {
     Assert-OwnedDirectory $script:InstallRoot
     if (!(Test-Path -LiteralPath $script:ConfigPath)) { throw '尚未安装，请先运行 Install.cmd。' }
@@ -490,7 +524,7 @@ function Launch-Badge {
     })
     if ($running.Count -gt 0) { throw '客户端已运行，但没有开启用量条连接。请从托盘菜单或客户端菜单完全退出，再运行 Launch.cmd。不会强制结束你的会话。' }
     # Only this explicit user action starts the GUI. The Run action cannot call this function.
-    Start-Process -FilePath $config.AppExe -ArgumentList '--remote-debugging-address=127.0.0.1 --remote-debugging-port=39222' | Out-Null
+    Start-DesktopWithConnection $config | Out-Null
     for ($i = 0; $i -lt 30; $i++) {
         if (@(Get-DebugPages).Count -gt 0) { return }
         Start-Sleep -Seconds 1
@@ -539,7 +573,7 @@ function Show-Status {
 
 function Get-AutoUpdateEnabled {
     $preference = Read-Json (Join-Path $script:InstallRoot 'update-preferences.json')
-    return (Get-Setting $preference 'Enabled') -ne $false
+    return (Get-Setting $preference 'Enabled') -eq $true
 }
 function Invoke-BadgeUpdate([bool]$Force) {
     Assert-OwnedDirectory $script:InstallRoot

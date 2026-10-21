@@ -6,7 +6,8 @@
 
 ## 功能
 
-- **额度圆环**：查看订阅剩余额度，绿、黄、红对应充足、偏低和即将耗尽。Plus 支持 5 小时与每周额度双圆环。
+- **额度圆环**：查看订阅剩余额度，绿、黄、红对应充足、偏低和即将耗尽。按实际有效的 5 小时、每周额度周期显示单圆环或双圆环，不依赖套餐名称。
+- **位置调整**：上下拖动额度条并保存位置，双击或 Home 复位，方向键微调；自动避让原生按钮，空间不足时隐藏。
 - **文件夹配色**：在项目菜单中选择颜色，方便区分不同项目。
 - **文件夹容量（macOS）**：在本地项目名称旁显示目录占用，支持 KB、MB、GB 等单位，自动缓存并刷新。
 - **会话 Token**：用蓝色色块表示用量，悬停查看累计 Token，按万、千万、亿显示。
@@ -25,6 +26,6 @@ macOS 和 Windows 安装后均可沿用原应用图标，启动时自动加载�
 
 [更新记录](CHANGELOG.md) · [问题反馈](https://github.com/jaykinhoo9/codex-usage-badge/issues) · [开发说明](docs/development.md) · [隐私与安全](SECURITY.md)
 
-Windows v0.10.1 起默认从 GitHub Release 自动更新，可通过 `Update.cmd` 立即检查。旧版本需先手动升级一次；之后发布更高版本的 Windows 安装包和校验清单即可自动分发。[更新设置与发布方式](docs/windows.md)
+本 fork 的 Windows 安装默认关闭自动更新，升级时保留已有选择，避免覆盖本机定制。`Update.cmd` 仍可显式检查原项目的 Windows Release。[更新设置与发布方式](docs/windows.md)
 
 非官方项目，与 OpenAI 无关联。采用 [MIT 许可](LICENSE)。
