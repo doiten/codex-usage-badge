@@ -1,13 +1,17 @@
 'use strict';
 const assert=require('node:assert/strict');
+const fs=require('node:fs');
+const os=require('node:os');
+const path=require('node:path');
 const {StartupController}=require('../startup/controller.cjs');
+const {writeReceipt}=require('../startup/windows.cjs');
 const app=(key='new',overrides={})=>({key,pid:20,launchedAt:99500,finishedLaunching:true,argumentsKnown:true,debugPort:null,...overrides});
-async function scenario({baseline=[],fresh=[app()],snapshot={},quit=true,exit=true,launch=true,failReceipt=false,lastAttemptAt=0,onSleep,onLaunch,portInUse=false,foreground=20}={},verify) {
+async function scenario({baseline=[],fresh=[app()],snapshot={},quit=true,exit=true,launch=true,failReceipt=false,persistAttempt,lastAttemptAt=0,onSleep,onLaunch,portInUse=false,foreground=20}={},verify) {
   let now=100000, calls=[], records=[], apps=baseline, input='1', frontmost=foreground;
   const adapter={
     snapshot:async()=>({apps,frontmostPid:frontmost,inputStamp:input,inputIdleMs:10000,...snapshot}),
     portInUse:async()=>portInUse,
-    record:async(event,details)=>{records.push(event);if(event==='attempt'&&failReceipt)throw Error('disk full');},
+    record:async(event,details)=>{records.push(event);if(event==='attempt'){if(failReceipt)throw Error('disk full');persistAttempt?.(details);}},
     quit:async(a,stamp)=>{calls.push('quit');if(exit&&quit){apps=[];frontmost=30;}return {accepted:quit};},
     launch:async()=>{calls.push('launch');apps=[app('replacement',{debugPort:'39222'})];onLaunch?.();return {launched:launch,key:'replacement',pid:21};},
     show:async(a,stamp,front)=>{if(input!==stamp||frontmost!==front)return {shown:false};calls.push('show');return {shown:true};}
@@ -39,6 +43,24 @@ async function scenario({baseline=[],fresh=[app()],snapshot={},quit=true,exit=tr
     background.frontmostPid=20;await control.tick();assert.deepEqual(calls,[]);
   });
   await scenario({failReceipt:true},({calls,records})=>{assert.deepEqual(calls,[]);assert.ok(records.includes('error'));});
+  const temp=fs.mkdtempSync(path.join(os.tmpdir(),'badge-receipt-guard-'));
+  try {
+    const receipt=path.join(temp,'state.json');
+    writeReceipt(receipt,{lastAttemptAt:123,event:'previous'});
+    const previous=fs.readFileSync(receipt,'utf8');
+    for(const code of ['EPERM','EACCES','EBUSY','ENOSPC']) {
+      let attempts=0,totalWait=0;
+      await scenario({persistAttempt:details=>writeReceipt(receipt,details,{rename:()=>{attempts++;throw Object.assign(Error('synthetic receipt failure'),{code});},wait:ms=>totalWait+=ms})},({calls,records})=>{
+        assert.deepEqual(calls,[]);assert.ok(records.includes('error'));
+      });
+      assert.equal(attempts,code==='ENOSPC'?1:13);assert.equal(totalWait,code==='ENOSPC'?0:300);
+      assert.equal(fs.readFileSync(receipt,'utf8'),previous);assert.deepEqual(fs.readdirSync(temp),['state.json']);
+    }
+    let locked=2;
+    await scenario({persistAttempt:details=>writeReceipt(receipt,details,{rename:(from,to)=>{if(locked-->0)throw Object.assign(Error('sharing violation'),{code:'EBUSY'});fs.renameSync(from,to);},wait:()=>{}})},({calls})=>{
+      assert.deepEqual(calls,['quit','launch','show']);assert.equal(JSON.parse(fs.readFileSync(receipt,'utf8')).lastAttemptAt,100000);
+    });
+  } finally {fs.rmSync(temp,{recursive:true,force:true});}
   await scenario({quit:false},async({calls,control})=>{await control.tick();assert.deepEqual(calls,['quit']);});
   await scenario({exit:false},({calls,records})=>{assert.deepEqual(calls,['quit']);assert.ok(records.includes('quit-timeout'));});
   await scenario({onSleep:({setInput})=>setInput('2')},({calls})=>assert.deepEqual(calls,['quit']));
