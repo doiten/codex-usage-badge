@@ -1,6 +1,10 @@
 'use strict';
 const assert=require('node:assert/strict');
 const crypto=require('node:crypto');
+const fs=require('node:fs');
+const os=require('node:os');
+const path=require('node:path');
+const {spawnSync}=require('node:child_process');
 const {compareVersions,selectRelease,verifyArchive,checkForUpdate,getBytes,INTERVAL}=require('../windows/update.cjs');
 const data=Buffer.from('synthetic Windows archive');
 const hash=crypto.createHash('sha256').update(data).digest('hex');
@@ -49,5 +53,23 @@ function server(releases,{badHash=false,error=false}={}) {
   assert.equal((await checkForUpdate({...options,fetcher:server([release('0.10.0')]).fetcher,force:true,state:{checkedAt:100000000}})).event,'up-to-date');
   assert.equal((await checkForUpdate({...options,state:{checkedAt:100000000+INTERVAL}})).event,'updated');
   await assert.rejects(getBytes('fixture',2,async()=>new Response('too large')),/size limit/);
+  const temp=fs.mkdtempSync(path.join(os.tmpdir(),'badge-update-preference-'));
+  try {
+    const script=path.join(temp,'update.cjs'),preference=path.join(temp,'update-preferences.json'),state=path.join(temp,'update-state.json'),guard=path.join(temp,'guard.cjs');
+    fs.copyFileSync(path.join(__dirname,'../windows/update.cjs'),script);
+    fs.writeFileSync(path.join(temp,'.codex-usage-badge-owner'),'local.codexusagebadge.windows');
+    fs.writeFileSync(path.join(temp,'config.json'),JSON.stringify({Version:'0.10.1'}));
+    fs.writeFileSync(guard,"global.fetch=async()=>{throw Error('synthetic network requested');};");
+    function run(args=[]) {return spawnSync(process.execPath,['--require',guard,script,...args],{encoding:'utf8',timeout:5000});}
+    for(const value of [undefined,{}, {Enabled:false}]) {
+      if(value===undefined)fs.rmSync(preference,{force:true});else fs.writeFileSync(preference,JSON.stringify(value));
+      const result=run();assert.equal(result.status,0,result.stderr);assert.equal(fs.existsSync(state),false);
+    }
+    fs.writeFileSync(preference,JSON.stringify({Enabled:true}));
+    let result=run();assert.equal(result.status,1);assert.match(result.stderr,/synthetic network requested/);
+    fs.rmSync(state,{force:true});fs.writeFileSync(preference,JSON.stringify({Enabled:false}));
+    result=run(['--force']);assert.equal(result.status,1);assert.match(result.stderr,/synthetic network requested/);
+    console.log('PASS updater entry point: missing/disabled preference makes no requests; explicit opt-in and manual check remain available');
+  } finally {fs.rmSync(temp,{recursive:true,force:true});}
   console.log('PASS Windows update versions, platform filter, trusted asset URLs, SHA-256, interval, offline retry, corruption, failed install, manual check');
 })().catch(error=>{console.error(error);process.exitCode=1;});

@@ -26,7 +26,7 @@ macOS 额外运行原生测试：
 node tests/startup-native.cjs .devtools/macos-startup-bridge
 ```
 
-PowerShell 测试：`pwsh -File tests/windows.ps1`。Windows CI 还会运行 `tests/windows-native.ps1`，验证安装、快捷方式、后台停止和卸载。
+PowerShell 测试：`pwsh -File tests/windows.ps1`。`tests/windows-launch.ps1` 使用合成包清单和替代原生助手验证手动 Store 启动路径；Windows CI 在 PowerShell 5.1 下执行它，并运行 `tests/windows-native.ps1` 验证安装、快捷方式、后台停止和卸载。
 
 Windows 启动适配器测试：`powershell -NoProfile -ExecutionPolicy Bypass -File tests/windows-startup-native.ps1`。它仅操作临时隐藏应用，检查进程身份、Raw Input 活动分类、正常退出/拒绝及重开。`startup/` 为 Windows 适配器；macOS 保持原有 `macos/startup/` 实现。
 
@@ -49,4 +49,11 @@ Token 读取本机会话数据库中的累计值，包含缓存输入，不代�
 - [上游 PR #4](https://github.com/jaykinhoo9/codex-usage-badge/pull/4)，提交 `2e77ffad9c47046724575bc94edc6e02e0118067`：按有效额度周期决定单／双圆环；补充忽略同周期无效数据的回归覆盖。
 - [上游 PR #9](https://github.com/jaykinhoo9/codex-usage-badge/pull/9)，提交 `2b774ef0eb0686f4644bd36e6f16a2018ee4966c`：仅移植 Windows 启动状态的唯一临时文件和有界共享冲突重试，以及相关测试。未移植该 PR 的 Store 手动启动部分。
 
-此分支不包含用户 Windows 本机已有的拖动与位置保存、空间避让、启动参数等待和 Store 激活定制。后续集成需另行迁移这些定制，保留本机已关闭的自动更新设置；云端 Windows ZIP 仅供构建验证，不应直接覆盖定制安装。真实 Codex 界面、Microsoft Store 启动及 Windows PowerShell 5.1 仍需 Windows 实机验收。
+另外，将 2026-10-20 本机补丁从原线程保留的完整差异迁入可构建源码：
+
+- `src/injected-ui.js`：拖动阈值、位置保存与跨窗口同步、键盘微调、双击／Home 复位、原生按钮避让及空间不足时隐藏。沿用 `codex-usage-badge.position.v1` 存储键与偏移格式。
+- `startup/controller.cjs`：刚创建进程的命令行暂不可读时，在原有 8 秒窗口内等待；补充跳过原因。前台、输入、多实例、冷却和状态持久化保护继续生效。
+- `windows/manage-windows.ps1`：手动 Store 启动按精确可执行路径解析注册包标识，复用现有原生激活实现；身份解析或激活失败时不直接执行受保护文件。
+- Windows 自动更新默认关闭，重装保留已有显式偏好；手动检查仍可运行。macOS 更新策略不变。
+
+`npm test` 包含原补丁的 16 项几何边界和 11 项启动逻辑用例，以及独立浏览器中的拖动、保存恢复、单／双环切换和空间避让测试。历史本机验收不等同于本次整合版本的实机验收；真实 Codex 界面、Microsoft Store 激活及 Windows PowerShell 5.1 仍需 Windows 环境检查。构建和合并不会修改本机已安装应用。

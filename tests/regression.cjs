@@ -170,9 +170,10 @@ async function run() {
     assert.deepEqual(await badge.locator('.usage-number').allTextContents(),['94%','73%']);
     await page.setViewportSize({width:320,height:270});
     await sleep(300);
-    const dualSmall=await badge.boundingBox();
-    assert.ok(dualSmall.y>=0&&dualSmall.y+dualSmall.height<=(await page.locator('.help').boundingBox()).y);
+    assert.equal(await badge.isVisible(),false,'hide dual rings when native controls leave insufficient room');
+    assert.equal(await page.evaluate(()=>window.__codexUsageBadge.status().positionFits),false);
     await page.evaluate(v=>window.__codexUsageBadge.update(v),formatRateLimits(weekly));
+    assert.equal(await badge.isVisible(),true,'single ring returns when its full height fits');
     assert.equal(await rings.count(),1);
     assert.equal((await badge.boundingBox()).height,84);
     assert.equal(await badge.getAttribute('role'),'meter');

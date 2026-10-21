@@ -95,7 +95,8 @@ async function main() {
   if(fs.readFileSync(path.join(root,'.codex-usage-badge-owner'),'utf8').trim()!=='local.codexusagebadge.windows')throw Error('Update install ownership check failed');
   const config=JSON.parse(fs.readFileSync(configFile,'utf8'));
   const force=process.argv.includes('--force');
-  try{if(JSON.parse(fs.readFileSync(path.join(root,'update-preferences.json'),'utf8')).Enabled===false&&!force)return;}catch(error){if(error.code!=='ENOENT')throw error;}
+  try{if(JSON.parse(fs.readFileSync(path.join(root,'update-preferences.json'),'utf8')).Enabled!==true&&!force)return;}
+  catch(error){if(error.code!=='ENOENT')throw error;if(!force)return;}
   let state={};try{state=JSON.parse(fs.readFileSync(file,'utf8'));}catch(error){if(error.code!=='ENOENT')throw error;}
   // The manager holds the OS update mutex, including during installation and rollback.
   await checkForUpdate({current:config.Version,state,force,installPackage:candidate=>installDownloaded(root,candidate,force),record:async value=>{
