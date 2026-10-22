@@ -1,0 +1,48 @@
+.github/workflows/ci.yml
+  s_133f2d843fb543::t_8104e96597e36a 40-43
+tests/windows-startup.cjs
+  s_133f2d843fb543::t_78da27c4f49fcd 58-70,82
+tests/windows-startup-native.ps1
+  s_133f2d843fb543::t_78da27c4f49fcd 63-75
+docs/windows.md
+  s_133f2d843fb543::t_72506f79013172 17-18
+  s_133f2d843fb543::t_78da27c4f49fcd 19-20
+CHANGELOG.md
+  s_133f2d843fb543::t_78da27c4f49fcd 3-7
+startup/windows.cjs
+  s_133f2d843fb543::t_64de79d3533214 11,42-47,105-106,108-111
+  s_133f2d843fb543::t_16426572986306 107
+tests/windows-native.ps1
+  s_133f2d843fb543::t_16426572986306 11,19,29,33-42,71,75-77,94-95,97-106,138-142
+  s_133f2d843fb543::t_78da27c4f49fcd 87,89-93,96
+windows/manage-windows.ps1
+  s_133f2d843fb543::t_64de79d3533214 362-364,370,379,388-403,420-422,425,430,433,435-439,448-449,452
+  s_133f2d843fb543::t_72506f79013172 302-340,345-346
+tests/windows-background-native.ps1
+  s_133f2d843fb543::t_c20604d586f6f3 1,81,83-85,94-103
+  s_133f2d843fb543::t_8104e96597e36a 2-41,43-44,46-80,82,86-93,104-111,113-119,122-130,136,138-142
+  s_133f2d843fb543::t_7a1f4ddf788be9 112,137
+  s_133f2d843fb543::t_a823800805ebc9 131-135
+  s_133f2d843fb543::t_1f2bc7086f7746 42,45,120-121
+startup/windows-bridge.ps1
+  s_133f2d843fb543::t_64de79d3533214 13
+docs/development.md
+  s_133f2d843fb543::t_8104e96597e36a 33-34
+  s_133f2d843fb543::t_78da27c4f49fcd 35-36
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "4f76c2b2c978b177ac3a4b5336db781feee71068",
+  "prompts": {},
+  "sessions": {
+    "s_133f2d843fb543": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a15e23-27a4-7f30-b1c2-d05957d5dbe5",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "liushihang <liushihang@chengcetech.com>"
+    }
+  }
+}
