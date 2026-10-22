@@ -30,6 +30,10 @@ PowerShell 测试：`pwsh -File tests/windows.ps1`。`tests/windows-launch.ps1` 
 
 Windows 启动适配器测试：`powershell -NoProfile -ExecutionPolicy Bypass -File tests/windows-startup-native.ps1`。它仅操作临时隐藏应用，检查进程身份、Raw Input 活动分类、正常退出/拒绝及重开。`startup/` 为 Windows 适配器；macOS 保持原有 `macos/startup/` 实现。
 
+后台独立性测试：`powershell -NoProfile -ExecutionPolicy Bypass -File tests/windows-background-native.ps1`。它关闭临时安装器所属的 Windows Job，确认真实后台启动方法创建的隐藏进程继续存活，保留环境、Unicode 参数和工作目录，并可正常停止。
+
+`tests/windows-native.ps1` 还模拟客户端路径更新，确认数据进程被替换，启动控制器和原生输入监测器保持原进程，并通过 RPC 接受新路径；`tests/windows-startup-native.ps1` 检查切换路径前后的输入时间和活动序号连续。
+
 只构建 Windows：`python scripts/build_release.py --platform Windows`。其版本取自 `package.json` 的 `windowsVersion`，不修改 macOS 的 `version` 或已有发布附件。Windows 发布使用 `v<版本>-windows` 标签，只上传 Windows ZIP 和该 ZIP 的校验文件。
 
 `build_release.py` 在 macOS 生成两个平台的 ZIP，在 Windows 生成 Windows ZIP。文件输出到 `dist/`，附带 SHA256 校验清单。发布前将本次源码加入 Git 暂存区，再执行隐私检查；检查覆盖所有受跟踪源码和安装包。

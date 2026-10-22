@@ -60,6 +60,19 @@ public class StartupFixture : Form {
     Assert ($meaningful.Invoke($null,@([uint32]1,[uint16]0))) 'Typing must protect active work'
     Assert (!$meaningful.Invoke($null,@([uint32]1,[uint16]1))) 'Launch key release must not cancel startup'
     Assert (([CodexUsageBadge.Startup.Native]::TakeSnapshot()).inputStamp -ne 'unknown') 'Raw Input monitor must be running'
+    $nextFixture=Join-Path $temp 'Updated/Codex.exe'
+    [void][IO.Directory]::CreateDirectory((Split-Path -Parent $nextFixture))
+    Copy-Item -LiteralPath $fixture -Destination $nextFixture
+    Start-Sleep -Milliseconds 30
+    $beforePathChange=[CodexUsageBadge.Startup.Native]::TakeSnapshot()
+    [CodexUsageBadge.Startup.Native]::Configure($nextFixture,(Join-Path $temp 'watcher-stop'),$PID)
+    $afterPathChange=[CodexUsageBadge.Startup.Native]::TakeSnapshot()
+    if ($afterPathChange.inputStamp -eq $beforePathChange.inputStamp) {
+        Assert ($afterPathChange.inputIdleMs -ge $beforePathChange.inputIdleMs) 'Client path changes must preserve input idle history'
+    } else {
+        Assert ([long]($afterPathChange.inputStamp.Split(':')[1]) -gt [long]($beforePathChange.inputStamp.Split(':')[1])) 'Client path change reset input monitoring instead of retaining real activity'
+    }
+    [CodexUsageBadge.Startup.Native]::Configure($fixture,(Join-Path $temp 'watcher-stop'),$PID)
     Start-Fixture '--remote-debugging-port=39222'
     $snapshot=[CodexUsageBadge.Startup.Native]::TakeSnapshot()
     Assert ($snapshot.apps.Count -eq 1 -and $snapshot.apps[0].debugPort -eq '39222') 'Actual Windows argument inspection'

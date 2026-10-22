@@ -37,6 +37,10 @@ jobs:
         if: runner.os == 'Windows'
         shell: powershell
         run: ./tests/windows-native.ps1
+      - name: Windows background survives installer exit
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: ./tests/windows-background-native.ps1
       - name: Windows manual Store launcher
         if: runner.os == 'Windows'
         shell: powershell

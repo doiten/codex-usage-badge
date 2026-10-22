@@ -8,7 +8,7 @@ const {StartupController}=require('./controller.cjs');
 
 class NativeBridge {
   constructor(app,stopFile,{spawnProcess=spawn}={}) {
-    this.nextId=0;this.pending=new Map();this.closed=false;
+    this.app=app;this.nextId=0;this.pending=new Map();this.closed=false;
     const shell=path.join(process.env.SystemRoot,'System32/WindowsPowerShell/v1.0/powershell.exe');
     this.child=spawnProcess(shell,['-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',path.join(__dirname,'windows-bridge.ps1'),'-AppExe',app,'-StopFile',stopFile,'-ParentId',String(process.pid)],{windowsHide:true,stdio:['pipe','pipe','pipe']});
     this.lines=readline.createInterface({input:this.child.stdout});
@@ -38,6 +38,12 @@ class NativeBridge {
       this.pending.set(id,{resolve,reject,timer});
       this.child.stdin.write(JSON.stringify({id,action,...fields})+'\n');
     });
+  }
+  async setApplication(app) {
+    if(app===this.app)return false;
+    await this.call('configure',{app});
+    this.app=app;
+    return true;
   }
   close() {this.fail(Error('Startup watcher stopped'));this.child.stdin.end();this.lines.close();}
 }
@@ -96,7 +102,13 @@ async function main() {
   const stopTimer=setInterval(()=>{if(fs.existsSync(stopFile))shutdown();},200);
   async function tick(){
     if(stopped)return;
-    await controller.tick();
+    try {
+      const current=JSON.parse(fs.readFileSync(path.join(root,'config.json'),'utf8'));
+      if(await bridge.setApplication(current.AppExe))await adapter.record('client-path-refreshed',{lastPathRefreshAt:Date.now()});
+      await controller.tick();
+    } catch(error) {
+      await adapter.record('error',{message:error.message}).catch(()=>{});
+    }
     if(bridge.closed)return shutdown(1);
     if(!stopped)timer=setTimeout(tick,controller.pendingLaunch?200:1000);
   }

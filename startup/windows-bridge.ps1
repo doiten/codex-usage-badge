@@ -10,6 +10,7 @@ while ($null -ne ($line=[Console]::ReadLine())) {
     try {
         $request=$line | ConvertFrom-Json
         $result=switch($request.action) {
+            'configure' { [CodexUsageBadge.Startup.Native]::Configure($request.app,$StopFile,$ParentId); @{configured=$true} }
             'snapshot' { [CodexUsageBadge.Startup.Native]::TakeSnapshot() }
             'quit' { [CodexUsageBadge.Startup.Native]::Quit($request.pid,$request.key,$request.stamp) }
             'launch' { [CodexUsageBadge.Startup.Native]::Launch($request.stamp,$request.foreground) }

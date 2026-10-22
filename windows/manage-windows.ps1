@@ -299,11 +299,51 @@ function Stop-Worker {
     while ((Test-Worker) -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 200 }
     if (Test-Worker) { throw '后台任务尚未退出，安装目录保持不变。请注销 Windows 后重试，或先运行 Status.cmd。' }
 }
+function Initialize-BackgroundApi {
+    if ('CodexUsageBadge.Background' -as [type]) { return }
+    Add-Type -TypeDefinition @'
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+using System.Text;
+namespace CodexUsageBadge {
+    public static class Background {
+        [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]
+        struct StartupInfo {
+            public int size;
+            public string reserved, desktop, title;
+            public uint x, y, width, height, columns, rows, fill, flags;
+            public ushort show, reservedSize;
+            public IntPtr reservedData, input, output, error;
+        }
+        [StructLayout(LayoutKind.Sequential)]
+        struct ProcessInfo { public IntPtr process, thread; public uint pid, tid; }
+        [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+        static extern bool CreateProcessW(string app, StringBuilder command, IntPtr processSecurity,
+            IntPtr threadSecurity, bool inherit, uint flags, IntPtr environment, string directory,
+            ref StartupInfo startup, out ProcessInfo process);
+        [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr handle);
+        public static int StartHidden(string app, string arguments, string directory) {
+            var startup = new StartupInfo {size=Marshal.SizeOf(typeof(StartupInfo)), flags=1, show=0};
+            ProcessInfo process;
+            // Keep the supervisor outside an installer's kill-on-close job (for example Codex).
+            // Inherit the environment, but never its console or redirected pipe handles.
+            if (!CreateProcessW(app, new StringBuilder("\""+app+"\" "+arguments), IntPtr.Zero,
+                IntPtr.Zero, false, 0x01000000|0x08000000, IntPtr.Zero, directory, ref startup, out process))
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "Cannot start independent badge background");
+            try { return checked((int)process.pid); }
+            finally { CloseHandle(process.thread); CloseHandle(process.process); }
+        }
+    }
+}
+'@
+}
 function Start-Worker {
     if (Test-Worker) { return }
     if (Test-Path -LiteralPath $script:StopPath) { Remove-Item -LiteralPath $script:StopPath -Force }
     if (Test-Path -LiteralPath $script:StatePath) { Remove-Item -LiteralPath $script:StatePath -Force }
-    Start-Process -FilePath $script:PowerShell -ArgumentList (Get-ManagerArguments 'Run') -WindowStyle Hidden | Out-Null
+    Initialize-BackgroundApi
+    [void][CodexUsageBadge.Background]::StartHidden($script:PowerShell, (Get-ManagerArguments 'Run'), $script:InstallRoot)
     $deadline = [DateTime]::UtcNow.AddSeconds(25)
     while ([DateTime]::UtcNow -lt $deadline) {
         Start-Sleep -Milliseconds 200
@@ -319,11 +359,15 @@ function Run-Worker {
     $owned = $false
     $child = $null
     $startup = $null
+    $startupReady = $false
+    $startupLogs = @()
+    $startupStop = $null
     $generationStop = $null
     $nextUpdateCheck = [DateTime]::UtcNow.AddSeconds(30)
     try {
         try { $owned = $mutex.WaitOne(0) } catch [Threading.AbandonedMutexException] { $owned = $true }
         if (!$owned) { return }
+        $startupStop = Join-Path $script:InstallRoot ('startup-stop-' + [guid]::NewGuid().ToString('N') + '.request')
         # Login only starts observers. The guarded helper completes a NEW user launch.
         while (!(Test-Path -LiteralPath $script:StopPath)) {
             $refresh = $false
@@ -332,7 +376,7 @@ function Run-Worker {
                 Write-Json $script:ConfigPath $config
                 $logRoot = Join-Path $script:InstallRoot 'logs'
                 [void][IO.Directory]::CreateDirectory($logRoot)
-                Get-ChildItem -LiteralPath $logRoot -File | Sort-Object LastWriteTimeUtc -Descending | Select-Object -Skip 8 | Remove-Item -Force
+                Get-ChildItem -LiteralPath $logRoot -File | Where-Object { $_.FullName -notin $startupLogs } | Sort-Object LastWriteTimeUtc -Descending | Select-Object -Skip 8 | Remove-Item -Force -ErrorAction SilentlyContinue
                 $stamp = [DateTime]::UtcNow.ToString('yyyyMMdd-HHmmss-fff')
                 $env:CODEX_BADGE_APP = $config.AppExe
                 $env:CODEX_BADGE_BIN = $config.CodexBin
@@ -341,17 +385,23 @@ function Run-Worker {
                 $generationStop = Join-Path $script:InstallRoot ('worker-stop-' + [guid]::NewGuid().ToString('N') + '.request')
                 $env:CODEX_BADGE_STOP_FILE = $generationStop
                 $child = Start-Process -FilePath $config.NodeExe -ArgumentList (Join-NativeArguments @((Join-Path $script:InstallRoot 'agent.cjs'))) -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $logRoot ($stamp + '.out.log')) -RedirectStandardError (Join-Path $logRoot ($stamp + '.err.log'))
-                $startedAt = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
-                $startup = Start-Process -FilePath $config.NodeExe -ArgumentList (Join-NativeArguments @((Join-Path $script:InstallRoot 'startup/windows.cjs'))) -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $logRoot ($stamp + '.startup.out.log')) -RedirectStandardError (Join-Path $logRoot ($stamp + '.startup.err.log'))
-                $ready = $false
-                $deadline = [DateTime]::UtcNow.AddSeconds(20)
-                while ([DateTime]::UtcNow -lt $deadline -and !(Test-Path -LiteralPath $script:StopPath)) {
-                    if ($child.HasExited -or $startup.HasExited) { throw '后台进程提前退出，请检查 logs 目录。' }
-                    $receipt = Read-Json (Join-Path $script:InstallRoot 'startup/state.json')
-                    if ((Get-Setting $receipt 'event') -eq 'watching' -and $receipt.updatedAt -ge $startedAt) { $ready = $true; break }
-                    Start-Sleep -Milliseconds 200
+                if ($startup -and $startup.HasExited) { $startup.Dispose(); $startup = $null; $startupReady = $false }
+                if (!$startup) {
+                    $startedAt = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+                    $startupLogs = @((Join-Path $logRoot ($stamp + '.startup.out.log')),(Join-Path $logRoot ($stamp + '.startup.err.log')))
+                    $env:CODEX_BADGE_STOP_FILE = $startupStop
+                    try {
+                        $startup = Start-Process -FilePath $config.NodeExe -ArgumentList (Join-NativeArguments @((Join-Path $script:InstallRoot 'startup/windows.cjs'))) -WindowStyle Hidden -PassThru -RedirectStandardOutput $startupLogs[0] -RedirectStandardError $startupLogs[1]
+                    } finally { $env:CODEX_BADGE_STOP_FILE = $generationStop }
+                    $deadline = [DateTime]::UtcNow.AddSeconds(20)
+                    while ([DateTime]::UtcNow -lt $deadline -and !(Test-Path -LiteralPath $script:StopPath)) {
+                        if ($child.HasExited -or $startup.HasExited) { throw '后台进程提前退出，请检查 logs 目录。' }
+                        $receipt = Read-Json (Join-Path $script:InstallRoot 'startup/state.json')
+                        if ((Get-Setting $receipt 'event') -eq 'watching' -and $receipt.updatedAt -ge $startedAt) { $startupReady = $true; break }
+                        Start-Sleep -Milliseconds 200
+                    }
+                    if (!$startupReady) { throw '原生启动监测器未就绪，请检查日志。' }
                 }
-                if (!$ready) { throw '原生启动监测器未就绪，请检查日志。' }
                 Write-Json $script:StatePath @{ State = 'running'; Pid = $PID; AgentPid = $child.Id; StartupPid = $startup.Id; Version = $script:Version; StartedAt = [DateTime]::UtcNow.ToString('o') }
                 $nextPathCheck = [DateTime]::UtcNow.AddSeconds(5)
                 while (!$child.HasExited -and !$startup.HasExited) {
@@ -367,20 +417,26 @@ function Run-Worker {
                     }
                     if ($refresh -or (Test-Path -LiteralPath $script:StopPath)) {
                         if ($refresh) {
+                            # Publish the new path while the original input monitor and launch history stay alive.
+                            $config = Resolve-Configuration (Read-Json $script:ConfigPath) $null
+                            Write-Json $script:ConfigPath $config
                             Write-Json $script:StatePath @{ State = 'refreshing-client-path'; Pid = $PID; Version = $script:Version }
                         }
-                        Stop-WorkerChildren $child $startup $generationStop
+                        Stop-WorkerChildren $child $null $generationStop
                         break
                     }
                     Start-Sleep -Milliseconds 400
                 }
-                Stop-WorkerChildren $child $startup $generationStop
+                Stop-WorkerChildren $child $null $generationStop
                 $child.Dispose(); $child = $null
-                $startup.Dispose(); $startup = $null
             } catch {
-                Stop-WorkerChildren $child $startup $generationStop
+                Stop-WorkerChildren $child $null $generationStop
                 if ($child) { $child.Dispose(); $child = $null }
-                if ($startup) { $startup.Dispose(); $startup = $null }
+                if ($startup -and (!$startupReady -or $startup.HasExited)) {
+                    Stop-WorkerChildren $null $startup $startupStop
+                    $startup.Dispose(); $startup = $null; $startupReady = $false
+                    if (Test-Path -LiteralPath $startupStop) { Remove-Item -LiteralPath $startupStop -Force }
+                }
                 Write-Json $script:StatePath @{ State = 'error'; Message = $_.Exception.Message; Version = $script:Version }
             } finally {
                 if ($generationStop -and (Test-Path -LiteralPath $generationStop)) { Remove-Item -LiteralPath $generationStop -Force }
@@ -389,9 +445,11 @@ function Run-Worker {
             for ($i = 0; $i -lt 30 -and !(Test-Path -LiteralPath $script:StopPath); $i++) { Start-Sleep -Seconds 1 }
         }
     } finally {
-        Stop-WorkerChildren $child $startup $generationStop
+        Stop-WorkerChildren $child $null $generationStop
+        Stop-WorkerChildren $null $startup $startupStop
         if ($startup) { $startup.Dispose() }
         if ($child) { $child.Dispose() }
+        foreach ($file in @($generationStop,$startupStop)) { if ($file -and (Test-Path -LiteralPath $file)) { Remove-Item -LiteralPath $file -Force } }
         if ($owned) { Write-Json $script:StatePath @{ State = 'stopped'; Version = $script:Version }; $mutex.ReleaseMutex() }
         $mutex.Dispose()
     }

@@ -8,6 +8,7 @@ $package = Join-Path $root ('dist/CodexUsageBadge-Windows-' + $version)
 $temp = Join-Path ([IO.Path]::GetTempPath()) ('badge-native-中文 空格-' + [guid]::NewGuid().ToString('N'))
 $originalLocal = $env:LOCALAPPDATA
 $originalCodeHome = $env:CODEX_HOME
+$updateClient = $null
 $originalEnv = @{}
 foreach ($key in @('CODEX_BADGE_APP','CODEX_BADGE_BIN','CODEX_BADGE_PORT','CODEX_BADGE_STOP_FILE')) { $originalEnv[$key] = [Environment]::GetEnvironmentVariable($key) }
 function Assert($Condition, [string]$Message) { if (!$Condition) { throw $Message } }
@@ -15,7 +16,7 @@ function Isolate-Package([string]$Directory) {
     # A developer may have a real client listening on 39222. Fixture agents and
     # uninstall cleanup must never connect to it, including in child supervisors.
     foreach($file in @(Get-ChildItem -LiteralPath $Directory -Recurse -File | Where-Object { $_.Extension -in @('.cjs','.ps1','.cs') })) {
-        $text=[IO.File]::ReadAllText($file.FullName).Replace('39222','49323')
+        $text=[IO.File]::ReadAllText($file.FullName).Replace('39222','49323').Replace('Codex|ChatGPT','Codex|ChatGPT|BadgeUpdateFixture')
         $encoding=New-Object Text.UTF8Encoding($file.Extension -eq '.ps1')
         [IO.File]::WriteAllText($file.FullName,$text,$encoding)
     }
@@ -25,11 +26,20 @@ try {
     $env:LOCALAPPDATA = $temp
     $env:CODEX_HOME = Join-Path $temp 'synthetic-home'
     [void][IO.Directory]::CreateDirectory($env:CODEX_HOME)
-    $gui = Join-Path $temp 'Fixture/Codex.exe'
+    $gui = Join-Path $temp 'Fixture/BadgeUpdateFixture.exe'
     [void][IO.Directory]::CreateDirectory((Join-Path (Split-Path $gui) 'resources'))
     Write-Utf8 (Join-Path (Split-Path $gui) 'resources/app.asar') 'synthetic fixture'
     $cli = Join-Path $temp 'codex.exe'
-    Add-Type -TypeDefinition 'public class BadgeFixture { public static void Main(string[] args) { System.Console.WriteLine("codex-cli fixture"); } }' -OutputAssembly $cli -OutputType ConsoleApplication
+    Add-Type -TypeDefinition @'
+public class BadgeFixture {
+    public static void Main(string[] args) {
+        string root=System.AppDomain.CurrentDomain.BaseDirectory;
+        if(System.IO.File.Exists(System.IO.Path.Combine(root,"resources/app.asar"))) {
+            while(!System.IO.File.Exists(System.IO.Path.Combine(root,"stop-client.request"))) System.Threading.Thread.Sleep(50);
+        } else {System.Console.WriteLine("codex-cli fixture");}
+    }
+}
+'@ -OutputAssembly $cli -OutputType ConsoleApplication
     Copy-Item -LiteralPath $cli -Destination $gui
     $runtime = (Get-Command node.exe -CommandType Application | Select-Object -First 1).Source
     $fixturePackage=Join-Path $temp 'isolated-package'
@@ -58,10 +68,13 @@ try {
     $duplicate.Dispose()
     Assert ((Read-Json $script:StatePath).AgentPid -eq $agentPid) 'Duplicate start replaced running worker'
     # Simulate a Store update removing the old executable while the supervisor is alive.
-    $updatedGui=Join-Path $temp 'Updated/Codex.exe'
+    $updatedGui=Join-Path $temp 'Updated/BadgeUpdateFixture.exe'
     [void][IO.Directory]::CreateDirectory((Join-Path (Split-Path $updatedGui) 'resources'))
     Copy-Item -LiteralPath $cli -Destination $updatedGui
     Write-Utf8 (Join-Path (Split-Path $updatedGui) 'resources/app.asar') 'updated fixture'
+    # The updated client is already running when its path becomes known, just like Store relaunch.
+    $updateStartedAt=[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+    $updateClient=Start-Process -FilePath $updatedGui -WindowStyle Hidden -PassThru
     $updated=Read-Json $script:ConfigPath
     $updated.AppExe=$updatedGui;$updated.Overrides.AppExe=$updatedGui
     Write-Json $script:ConfigPath $updated
@@ -71,9 +84,26 @@ try {
         Start-Sleep -Milliseconds 200
         $newState=Read-Json $script:StatePath
     } while (($newState.State -ne 'running' -or $newState.AgentPid -eq $agentPid) -and [DateTime]::UtcNow -lt $deadline)
-    Assert ($newState.State -eq 'running' -and $newState.AgentPid -ne $agentPid -and $newState.Pid -eq $state.Pid) 'client update must refresh observers without replacing supervisor'
+    Assert ($newState.State -eq 'running' -and $newState.AgentPid -ne $agentPid -and $newState.Pid -eq $state.Pid) 'client update must refresh data agent without replacing supervisor'
     Assert ((Read-Json $script:ConfigPath).AppExe -eq $updatedGui) 'updated app path not retained'
-    Assert (!(Get-Process -Id $nativePid -ErrorAction SilentlyContinue)) 'old native adapter must stop after path refresh'
+    Assert ($newState.StartupPid -eq $startupPid) 'client update must preserve startup launch history'
+    $deadline=[DateTime]::UtcNow.AddSeconds(5)
+    do {
+        Start-Sleep -Milliseconds 100
+        $pathReceipt=Read-Json (Join-Path $script:InstallRoot 'startup/state.json')
+    } while ($pathReceipt.lastPathRefreshAt -lt $updateStartedAt -and [DateTime]::UtcNow -lt $deadline)
+    Assert ($pathReceipt.lastPathRefreshAt -ge $updateStartedAt -and $pathReceipt.nativePid -eq $nativePid) 'native helper must adopt the new app path without restarting input monitoring'
+    Assert (!!(Get-Process -Id $nativePid -ErrorAction SilentlyContinue)) 'native input monitor exited during client update'
+    $deadline=[DateTime]::UtcNow.AddSeconds(10)
+    do {
+        Start-Sleep -Milliseconds 100
+        $launchReceipt=Read-Json (Join-Path $script:InstallRoot 'startup/state.json')
+    } while ($launchReceipt.event -ne 'skipped-active-or-background' -and [DateTime]::UtcNow -lt $deadline)
+    Assert ($launchReceipt.event -eq 'skipped-active-or-background' -and $launchReceipt.processKey.StartsWith([string]$updateClient.Id+':')) 'updated client was lost in an existing-window baseline'
+    Assert (!$updateClient.HasExited) 'hidden/background updated client must not be interrupted'
+    Write-Utf8 (Join-Path (Split-Path $updatedGui) 'stop-client.request') 'stop'
+    Assert ($updateClient.WaitForExit(5000)) 'updated fixture did not stop'
+    $updateClient.Dispose();$updateClient=$null
     $agentPid=$newState.AgentPid;$startupPid=$newState.StartupPid
     $nativePid=(Read-Json (Join-Path $script:InstallRoot 'startup/state.json')).nativePid
     Stop-Worker
@@ -105,6 +135,11 @@ try {
     Write-Host 'PASS Windows PowerShell 5.1 native install, real COM shortcuts, hidden process startup, singleton mutex, graceful stop, restart, uninstall'
 } finally {
     try { Stop-Worker } catch {}
+    if ($updateClient) {
+        Write-Utf8 (Join-Path (Split-Path $updatedGui) 'stop-client.request') 'stop'
+        if (!$updateClient.WaitForExit(5000)) {$updateClient.Kill();$updateClient.WaitForExit()}
+        $updateClient.Dispose()
+    }
     $env:LOCALAPPDATA = $originalLocal
     $env:CODEX_HOME = $originalCodeHome
     foreach ($key in $originalEnv.Keys) { [Environment]::SetEnvironmentVariable($key, $originalEnv[$key]) }
